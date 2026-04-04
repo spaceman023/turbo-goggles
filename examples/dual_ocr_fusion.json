@@ -1,0 +1,60 @@
+{
+  "name": "Dual OCR Fusion",
+  "description": "Tesseract + PaddleOCR with LLM fusion and OCR correction via OpenRouter.",
+  "chunking": {
+    "strategy": "page",
+    "chunk_size": 1,
+    "overlap": 0
+  },
+  "layers": [
+    {
+      "id": "ocr-tesseract",
+      "type": "ocr",
+      "engine": "tesseract",
+      "options": {
+        "languages": ["eng"]
+      }
+    },
+    {
+      "id": "ocr-paddle",
+      "type": "ocr",
+      "engine": "paddleocr",
+      "options": {
+        "languages": ["en"]
+      }
+    },
+    {
+      "id": "fusion",
+      "type": "fusion",
+      "source_layers": ["ocr-tesseract", "ocr-paddle"],
+      "backend": "openrouter",
+      "model": "anthropic/claude-sonnet-4",
+      "prompt_file": "prompts/fusion.md",
+      "include_image": false,
+      "options": {
+        "temperature": 0.1,
+        "max_tokens": 4096
+      }
+    },
+    {
+      "id": "correction",
+      "type": "llm",
+      "backend": "openrouter",
+      "model": "anthropic/claude-sonnet-4",
+      "prompt_file": "prompts/ocr_correction.md",
+      "include_image": false,
+      "options": {
+        "temperature": 0.1,
+        "max_tokens": 4096
+      }
+    },
+    {
+      "id": "output",
+      "type": "output",
+      "format": "txt",
+      "options": {
+        "preserve_page_breaks": true
+      }
+    }
+  ]
+}

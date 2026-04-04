@@ -1,0 +1,25 @@
+{
+  "name": "Quick Tesseract",
+  "description": "Simple single-engine OCR pipeline: Tesseract to plain text.",
+  "chunking": {
+    "strategy": "page",
+    "chunk_size": 1,
+    "overlap": 0
+  },
+  "layers": [
+    {
+      "id": "ocr-tesseract",
+      "type": "ocr",
+      "engine": "tesseract",
+      "options": {
+        "languages": ["eng"]
+      }
+    },
+    {
+      "id": "output",
+      "type": "output",
+      "format": "txt",
+      "options": {}
+    }
+  ]
+}
