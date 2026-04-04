@@ -13,6 +13,8 @@ from rich.table import Table
 
 from prism.models import JobStatus, PipelineConfig
 
+logger = logging.getLogger(__name__)
+
 console = Console(stderr=True)  # Rich output goes to stderr; JSONL goes to stdout
 
 
@@ -23,6 +25,10 @@ def _setup_logging(verbose: bool) -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    # Quiet noisy third-party loggers even in verbose mode
+    if verbose:
+        for noisy in ("urllib3", "PIL", "paddleocr", "ppocr"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 @click.group()
@@ -42,9 +48,14 @@ def run(config_path: Path, input_path: Path, output_dir: Path | None, verbose: b
 
     from prism.engine import PipelineEngine, create_job
 
+    logger.debug("CLI run: config=%s, input=%s, output_dir=%s", config_path, input_path, output_dir)
+
     # Load pipeline config
-    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    raw_text = config_path.read_text(encoding="utf-8")
+    logger.debug("Loaded config file: %d bytes", len(raw_text))
+    raw = json.loads(raw_text)
     pipeline = PipelineConfig.model_validate(raw)
+    logger.debug("Pipeline validated: name=%s, layers=%d", pipeline.name, len(pipeline.layers))
 
     console.print(f"[bold]PRISM[/bold] — {pipeline.name}")
     console.print(f"  Input:  {input_path}")
@@ -61,6 +72,7 @@ def run(config_path: Path, input_path: Path, output_dir: Path | None, verbose: b
     console.print()
 
     # Run pipeline
+    logger.info("Starting pipeline execution …")
     engine = PipelineEngine(job_dir, manifest)
     engine.run()
 
@@ -81,19 +93,25 @@ def resume(job_path: Path, verbose: bool) -> None:
 
     from prism.engine import PipelineEngine, load_job
 
+    logger.debug("CLI resume: job=%s", job_path)
+
     job_dir, manifest = load_job(job_path)
 
     if manifest.status == JobStatus.COMPLETE:
         console.print("[green]Job is already complete.[/green]")
+        logger.info("Job %s is already complete — nothing to do", manifest.job_id)
         return
 
     if manifest.status not in (JobStatus.HALTED, JobStatus.FAILED):
         console.print(f"[yellow]Job status is '{manifest.status.value}' — attempting resume anyway.[/yellow]")
+        logger.warning("Job %s has status '%s' (expected halted/failed), resuming anyway", manifest.job_id, manifest.status.value)
 
+    completed = sum(1 for c in manifest.chunks if c.status.value == "complete")
     console.print(f"[bold]PRISM[/bold] — Resuming {manifest.job_id}")
-    console.print(f"  Chunks completed: {sum(1 for c in manifest.chunks if c.status.value == 'complete')}/{len(manifest.chunks)}")
+    console.print(f"  Chunks completed: {completed}/{len(manifest.chunks)}")
     console.print()
 
+    logger.info("Resuming pipeline execution for %s …", manifest.job_id)
     engine = PipelineEngine(job_dir, manifest)
     engine.run()
 
@@ -125,7 +143,7 @@ def status(job_path: Path) -> None:
     table.add_row("Created", manifest.created_at)
     table.add_row("Updated", manifest.updated_at)
 
-    # Show halted chunk info
+    # Show per-chunk detail
     for chunk in manifest.chunks:
         if chunk.error:
             table.add_row(f"Error ({chunk.id})", chunk.error)
@@ -143,7 +161,6 @@ def engines() -> None:
     table.add_column("Status")
 
     for name in list_engines():
-        # Check if the engine can be imported
         try:
             from prism.engines.registry import get_engine
             get_engine(name)

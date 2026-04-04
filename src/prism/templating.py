@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, BaseLoader
+from jinja2 import Environment, BaseLoader, TemplateSyntaxError
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,42 @@ def render_prompt(
     variables: dict[str, Any],
 ) -> str:
     """Load a Jinja2 template from *template_path* and render with *variables*."""
+    logger.debug("render_prompt: template=%s", template_path)
+
     if not template_path.exists():
+        logger.error("Prompt template not found: %s", template_path)
         raise FileNotFoundError(f"Prompt template not found: {template_path}")
 
     raw = template_path.read_text(encoding="utf-8")
-    template = _env.from_string(raw)
+    logger.debug(
+        "  Template loaded: %d chars, %d lines",
+        len(raw),
+        raw.count("\n") + 1,
+    )
+
+    # Log which variables are provided (keys + types, not full values)
+    var_summary = {k: type(v).__name__ for k, v in variables.items()}
+    logger.debug("  Template variables: %s", var_summary)
+
+    try:
+        template = _env.from_string(raw)
+    except TemplateSyntaxError as e:
+        logger.error("  Jinja2 syntax error in %s: %s (line %s)", template_path.name, e.message, e.lineno)
+        raise
+
     rendered = template.render(**variables)
+
+    logger.debug(
+        "  Rendered prompt: %d chars, %d words, %d lines",
+        len(rendered),
+        len(rendered.split()),
+        rendered.count("\n") + 1,
+    )
+
+    # Rough token estimate for LLM context planning
+    estimated_tokens = int(len(rendered.split()) * 1.3)
+    logger.debug("  Estimated token count: ~%d", estimated_tokens)
+
     return rendered
 
 
@@ -39,7 +69,7 @@ def default_variables(
     custom: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the standard variable dict for prompt rendering."""
-    return {
+    result = {
         "text": text,
         "page_numbers": page_numbers or [],
         "chunk_index": chunk_index,
@@ -50,3 +80,15 @@ def default_variables(
         "sources": sources or [],
         "custom": custom or {},
     }
+    logger.debug(
+        "default_variables: filename=%s, layer=%s, chunk=%d/%d, pages=%s, "
+        "text_len=%d, sources_count=%d",
+        filename,
+        layer_name,
+        chunk_index,
+        total_chunks,
+        page_numbers or [],
+        len(text),
+        len(sources or []),
+    )
+    return result
