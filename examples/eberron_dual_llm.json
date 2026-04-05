@@ -1,0 +1,53 @@
+{
+  "name": "Eberron Dual LLM → Markdown",
+  "description": "Tesseract OCR → MiniMax 2.5 correction → Gemini 2.5 Flash markdown formatting. Parallel execution.",
+  "max_workers": 6,
+  "chunking": {
+    "strategy": "sliding_window",
+    "chunk_size": 5,
+    "overlap": 0
+  },
+  "layers": [
+    {
+      "id": "ocr-tesseract",
+      "type": "ocr",
+      "engine": "tesseract",
+      "options": {
+        "languages": ["eng"]
+      }
+    },
+    {
+      "id": "llm-minimax",
+      "type": "llm",
+      "backend": "openrouter",
+      "model": "minimax/minimax-m2.5",
+      "prompt_file": "prompts/ocr_correction.md",
+      "include_image": false,
+      "options": {
+        "temperature": 0.1,
+        "max_tokens": 4096
+      }
+    },
+    {
+      "id": "llm-gemini-md",
+      "type": "llm",
+      "backend": "openrouter",
+      "model": "google/gemini-2.5-flash",
+      "prompt_file": "prompts/markdown_format.md",
+      "include_image": false,
+      "options": {
+        "temperature": 0.1,
+        "max_tokens": 8192
+      }
+    },
+    {
+      "id": "output",
+      "type": "output",
+      "format": "md",
+      "options": {
+        "title": "Adventurer's Guide to Eberron",
+        "seamless": true
+      }
+    }
+  ]
+}
