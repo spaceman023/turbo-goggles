@@ -41,8 +41,9 @@ def main() -> None:
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True, path_type=Path), help="Pipeline config JSON file.")
 @click.option("--input", "input_path", required=True, type=click.Path(exists=True, path_type=Path), help="Input PDF file.")
 @click.option("--output-dir", type=click.Path(path_type=Path), default=None, help="Output directory (default: ~/.prism/jobs/).")
+@click.option("-w", "--workers", type=int, default=None, help="Override max parallel chunk workers.")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")
-def run(config_path: Path, input_path: Path, output_dir: Path | None, verbose: bool) -> None:
+def run(config_path: Path, input_path: Path, output_dir: Path | None, workers: int | None, verbose: bool) -> None:
     """Run a pipeline on a PDF document."""
     _setup_logging(verbose)
 
@@ -55,7 +56,9 @@ def run(config_path: Path, input_path: Path, output_dir: Path | None, verbose: b
     logger.debug("Loaded config file: %d bytes", len(raw_text))
     raw = json.loads(raw_text)
     pipeline = PipelineConfig.model_validate(raw)
-    logger.debug("Pipeline validated: name=%s, layers=%d", pipeline.name, len(pipeline.layers))
+    if workers is not None:
+        pipeline.max_workers = workers
+    logger.debug("Pipeline validated: name=%s, layers=%d, workers=%d", pipeline.name, len(pipeline.layers), pipeline.max_workers)
 
     console.print(f"[bold]PRISM[/bold] — {pipeline.name}")
     console.print(f"  Input:  {input_path}")
@@ -86,8 +89,9 @@ def run(config_path: Path, input_path: Path, output_dir: Path | None, verbose: b
 
 @main.command()
 @click.option("--job", "job_path", required=True, type=click.Path(exists=True, path_type=Path), help="Path to job directory.")
+@click.option("-w", "--workers", type=int, default=None, help="Override max parallel chunk workers.")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")
-def resume(job_path: Path, verbose: bool) -> None:
+def resume(job_path: Path, workers: int | None, verbose: bool) -> None:
     """Resume a halted job."""
     _setup_logging(verbose)
 
@@ -101,6 +105,9 @@ def resume(job_path: Path, verbose: bool) -> None:
         console.print("[green]Job is already complete.[/green]")
         logger.info("Job %s is already complete — nothing to do", manifest.job_id)
         return
+
+    if workers is not None:
+        manifest.pipeline.max_workers = workers
 
     if manifest.status not in (JobStatus.HALTED, JobStatus.FAILED):
         console.print(f"[yellow]Job status is '{manifest.status.value}' — attempting resume anyway.[/yellow]")
@@ -187,6 +194,28 @@ def validate(config_path: Path) -> None:
     except Exception as e:
         console.print(f"[bold red]✗ Invalid pipeline:[/bold red] {e}")
         sys.exit(1)
+
+
+@main.command()
+@click.option("--port", default=8420, help="Port to listen on.")
+@click.option("--no-open", is_flag=True, help="Don't auto-open browser.")
+def ui(port: int, no_open: bool) -> None:
+    """Launch the PRISM web UI."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]Web UI requires extra dependencies. Install with:[/red]")
+        console.print("  pip install 'prism-ocr[web]'")
+        sys.exit(1)
+
+    if not no_open:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://localhost:{port}")).start()
+
+    console.print(f"[bold]PRISM UI[/bold] → http://localhost:{port}")
+    uvicorn.run("prism.web.app:app", host="127.0.0.1", port=port, log_level="warning")
 
 
 if __name__ == "__main__":
