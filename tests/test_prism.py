@@ -216,7 +216,7 @@ class TestEngineRegistry:
     def test_list_engines(self):
         engines = list_engines()
         assert "tesseract" in engines
-        assert "paddleocr" in engines
+        # Other engines only appear if their library is installed
 
     def test_unknown_engine(self):
         with pytest.raises(ValueError, match="Unknown OCR engine"):
@@ -297,7 +297,6 @@ class TestCLI:
         result = runner.invoke(main, ["engines"])
         assert result.exit_code == 0
         assert "tesseract" in result.output
-        assert "paddleocr" in result.output
 
     def test_status_no_job(self, tmp_path):
         runner = CliRunner()
@@ -362,6 +361,8 @@ class TestEngineExecution:
 
         mock_paddleocr_mod = MagicMock()
         mock_ocr_instance = MagicMock()
+        # Mock predict() (new API) to raise so it falls back to ocr() (old API)
+        mock_ocr_instance.predict.side_effect = AttributeError("no predict")
         mock_ocr_instance.ocr.return_value = [
             [
                 [[[0, 0], [100, 0], [100, 20], [0, 20]], ("Line one", 0.99)],

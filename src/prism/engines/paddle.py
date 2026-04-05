@@ -1,8 +1,9 @@
-"""PaddleOCR engine adapter."""
+"""PaddleOCR engine adapter — supports both v2.x and v3.x API."""
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -20,10 +21,19 @@ class PaddleEngine(OCREngine):
     def _get_ocr(self, lang: str):
         if self._ocr is None:
             logger.debug("PaddleOCR: first use — importing and initialising (lang=%s) …", lang)
+            # Skip slow connectivity check on init
+            os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
             t0 = time.monotonic()
             from paddleocr import PaddleOCR
 
-            self._ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+            try:
+                self._ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+            except (TypeError, ValueError):
+                # PaddleOCR v3.x removed show_log and renamed use_angle_cls
+                try:
+                    self._ocr = PaddleOCR(lang=lang)
+                except Exception:
+                    self._ocr = PaddleOCR()
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.debug("PaddleOCR: initialised in %dms", elapsed_ms)
         return self._ocr
@@ -42,36 +52,58 @@ class PaddleEngine(OCREngine):
         ocr = self._get_ocr(lang)
 
         t0 = time.monotonic()
-        result = ocr.ocr(str(image_path), cls=True)
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-
         lines: list[str] = []
-        detection_count = 0
-        if result and result[0]:
-            for line_info in result[0]:
-                text = line_info[1][0]
-                confidence = line_info[1][1]
-                lines.append(text)
-                detection_count += 1
-                logger.debug(
-                    "  PaddleOCR detection: conf=%.3f text=%r",
-                    confidence,
-                    text[:80] + ("…" if len(text) > 80 else ""),
-                )
 
+        # Try new predict() API first (PaddleOCR v3.x), fall back to ocr() (v2.x)
+        try:
+            result = ocr.predict(str(image_path))
+            for page_result in result:
+                # v3.x predict returns objects with rec_texts or similar attributes
+                if hasattr(page_result, "rec_texts"):
+                    lines.extend(page_result.rec_texts)
+                elif hasattr(page_result, "text"):
+                    lines.append(page_result.text)
+                elif isinstance(page_result, dict):
+                    if "rec_text" in page_result:
+                        lines.append(page_result["rec_text"])
+                    elif "text" in page_result:
+                        lines.append(page_result["text"])
+                else:
+                    # Try string representation as last resort
+                    s = str(page_result)
+                    if s and len(s) < 10000:
+                        lines.append(s)
+        except (AttributeError, TypeError):
+            # Fall back to old ocr() API (v2.x)
+            try:
+                result = ocr.ocr(str(image_path), cls=True)
+            except TypeError:
+                result = ocr.ocr(str(image_path))
+
+            if result and result[0]:
+                for line_info in result[0]:
+                    try:
+                        if isinstance(line_info, dict):
+                            text = line_info.get("text", line_info.get("rec_text", ""))
+                        else:
+                            text = line_info[1][0]
+                        if text:
+                            lines.append(text)
+                    except (IndexError, KeyError, TypeError):
+                        pass
+
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         joined = "\n".join(lines)
-        word_count = len(joined.split()) if joined else 0
 
         logger.debug(
-            "PaddleOCR finished: image=%s, elapsed=%dms, detections=%d, words=%d, chars=%d",
+            "PaddleOCR finished: image=%s, elapsed=%dms, lines=%d, chars=%d",
             image_path.name,
             elapsed_ms,
-            detection_count,
-            word_count,
+            len(lines),
             len(joined),
         )
 
         if not joined.strip():
-            logger.warning("PaddleOCR returned empty/whitespace-only text for %s", image_path.name)
+            logger.warning("PaddleOCR returned empty text for %s", image_path.name)
 
         return joined

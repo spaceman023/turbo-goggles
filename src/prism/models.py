@@ -65,6 +65,7 @@ class PipelineConfig(BaseModel):
     description: str = ""
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     layers: list[LayerConfig]
+    max_workers: int = 1
 
 
 # ── Job / manifest models ────────────────────────────────────────────────────

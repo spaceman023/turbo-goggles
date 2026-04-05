@@ -1,16 +1,20 @@
-"""Pipeline execution engine — sequential processing with checkpoint/resume."""
+"""Pipeline execution engine — parallel processing with checkpoint/resume."""
 
 from __future__ import annotations
 
+import concurrent.futures
 import datetime
 import json
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 
 from prism.backends.registry import get_backend
 from prism.chunking import build_chunks
 from prism.engines.registry import get_engine
+from prism.formatters.markdown import format_markdown
 from prism.formatters.plain_text import format_plain_text
 from prism.jsonl import emit
 from prism.models import (
@@ -33,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineEngine:
-    """Runs a pipeline on a PDF document with checkpoint/resume support."""
+    """Runs a pipeline on a PDF document with checkpoint/resume and parallel execution."""
 
     def __init__(self, job_dir: Path, manifest: JobManifest) -> None:
         self.job_dir = job_dir
@@ -41,6 +45,7 @@ class PipelineEngine:
         self.pages_dir = job_dir / "pages"
         self.chunks_dir = job_dir / "chunks"
         self.final_dir = job_dir / "final"
+        self._lock = threading.Lock()
         logger.debug(
             "PipelineEngine init: job_id=%s, job_dir=%s, pages_dir=%s",
             manifest.job_id,
@@ -48,11 +53,12 @@ class PipelineEngine:
             self.pages_dir,
         )
         logger.debug(
-            "  Pipeline: %s (%d layers), chunks: %d, pages: %d",
+            "  Pipeline: %s (%d layers), chunks: %d, pages: %d, max_workers: %d",
             manifest.pipeline.name,
             len(manifest.pipeline.layers),
             len(manifest.chunks),
             manifest.total_pages,
+            manifest.pipeline.max_workers,
         )
         for i, layer in enumerate(manifest.pipeline.layers):
             logger.debug(
@@ -67,7 +73,7 @@ class PipelineEngine:
     # ── public API ───────────────────────────────────────────────────────
 
     def run(self) -> None:
-        """Execute the full pipeline from current state (supports resume)."""
+        """Execute the full pipeline from current state (supports resume and parallel chunks)."""
         logger.info("Pipeline run starting: job_id=%s, status=%s", self.manifest.job_id, self.manifest.status.value)
         job_t0 = time.monotonic()
 
@@ -75,58 +81,39 @@ class PipelineEngine:
         self._save_manifest()
 
         pipeline = self.manifest.pipeline
+        max_workers = pipeline.max_workers
 
-        completed_before = sum(1 for c in self.manifest.chunks if c.status == ChunkStatus.COMPLETE)
+        pending = [
+            (ci, chunk)
+            for ci, chunk in enumerate(self.manifest.chunks)
+            if chunk.status != ChunkStatus.COMPLETE
+        ]
+        completed_before = len(self.manifest.chunks) - len(pending)
         logger.debug("Chunks already complete: %d/%d", completed_before, len(self.manifest.chunks))
+        logger.info("Processing %d chunks with %d worker(s)", len(pending), max_workers)
 
-        for ci, chunk in enumerate(self.manifest.chunks):
-            if chunk.status == ChunkStatus.COMPLETE:
-                logger.debug("Skipping chunk %d/%d (%s) — already complete", ci + 1, len(self.manifest.chunks), chunk.id)
-                continue
+        has_errors = False
 
-            logger.info(
-                "Processing chunk %d/%d (%s): pages=%s",
-                ci + 1,
-                len(self.manifest.chunks),
-                chunk.id,
-                chunk.pages,
-            )
-            chunk_t0 = time.monotonic()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for ci, chunk in pending:
+                future = executor.submit(self._process_chunk, ci, chunk, pipeline)
+                futures[future] = (ci, chunk)
 
-            chunk.status = ChunkStatus.RUNNING
+            for future in concurrent.futures.as_completed(futures):
+                ci, chunk = futures[future]
+                try:
+                    future.result()
+                except Exception:
+                    has_errors = True
+
+        if has_errors:
+            self.manifest.status = JobStatus.HALTED
             self._save_manifest()
-
-            try:
-                self._run_chunk(ci, chunk, pipeline)
-            except Exception as exc:
-                chunk.status = ChunkStatus.HALTED
-                chunk.error = str(exc)
-                self.manifest.status = JobStatus.HALTED
-                self._save_manifest()
-                logger.error(
-                    "Chunk %s halted with error at layer %s: %s",
-                    chunk.id,
-                    chunk.halted_at_layer,
-                    exc,
-                    exc_info=True,
-                )
-                emit(
-                    ErrorMessage(
-                        job_id=self.manifest.job_id,
-                        chunk=ci,
-                        layer=chunk.halted_at_layer or 0,
-                        error=str(exc),
-                        halted=True,
-                    )
-                )
-                job_elapsed = int((time.monotonic() - job_t0) * 1000)
-                logger.info("Pipeline halted after %dms", job_elapsed)
-                return
-
-            chunk.status = ChunkStatus.COMPLETE
-            self._save_manifest()
-            chunk_elapsed = int((time.monotonic() - chunk_t0) * 1000)
-            logger.info("Chunk %s complete in %dms", chunk.id, chunk_elapsed)
+            job_elapsed = int((time.monotonic() - job_t0) * 1000)
+            failed = sum(1 for c in self.manifest.chunks if c.status == ChunkStatus.HALTED)
+            logger.info("Pipeline halted after %dms (%d chunks failed)", job_elapsed, failed)
+            return
 
         # ── merge final output ───────────────────────────────────────
         logger.info("All chunks complete. Merging final output …")
@@ -154,6 +141,55 @@ class PipelineEngine:
         )
 
     # ── chunk processing ─────────────────────────────────────────────
+
+    def _process_chunk(
+        self, chunk_index: int, chunk: ChunkState, pipeline: PipelineConfig
+    ) -> None:
+        """Run a single chunk end-to-end with status bookkeeping (thread-safe)."""
+        logger.info(
+            "Processing chunk %d/%d (%s): pages=%s",
+            chunk_index + 1,
+            len(self.manifest.chunks),
+            chunk.id,
+            chunk.pages,
+        )
+        chunk_t0 = time.monotonic()
+
+        with self._lock:
+            chunk.status = ChunkStatus.RUNNING
+            self._save_manifest_unlocked()
+
+        try:
+            self._run_chunk(chunk_index, chunk, pipeline)
+        except Exception as exc:
+            with self._lock:
+                chunk.status = ChunkStatus.HALTED
+                chunk.error = str(exc)
+                self._save_manifest_unlocked()
+            logger.error(
+                "Chunk %s halted with error at layer %s: %s",
+                chunk.id,
+                chunk.halted_at_layer,
+                exc,
+                exc_info=True,
+            )
+            emit(
+                ErrorMessage(
+                    job_id=self.manifest.job_id,
+                    chunk=chunk_index,
+                    layer=chunk.halted_at_layer or 0,
+                    error=str(exc),
+                    halted=True,
+                )
+            )
+            raise
+
+        with self._lock:
+            chunk.status = ChunkStatus.COMPLETE
+            self._save_manifest_unlocked()
+
+        chunk_elapsed = int((time.monotonic() - chunk_t0) * 1000)
+        logger.info("Chunk %s complete in %dms", chunk.id, chunk_elapsed)
 
     def _run_chunk(
         self, chunk_index: int, chunk: ChunkState, pipeline: PipelineConfig
@@ -242,9 +278,10 @@ class PipelineEngine:
                 len(accumulated_text.encode("utf-8")) / 1024,
             )
 
-            if li not in chunk.layers_completed:
-                chunk.layers_completed.append(li)
-            self._save_manifest()
+            with self._lock:
+                if li not in chunk.layers_completed:
+                    chunk.layers_completed.append(li)
+                self._save_manifest_unlocked()
 
             logger.info(
                 "  Layer %d/%d (%s) on %s — done in %dms, output=%d chars",
@@ -307,16 +344,41 @@ class PipelineEngine:
     def _run_ocr(self, layer: LayerConfig, chunk: ChunkState) -> str:
         logger.debug("  _run_ocr: engine=%s, pages=%s", layer.engine, chunk.pages)
         engine = get_engine(layer.engine)
-        texts: list[str] = []
+
+        # Build list of (page_num, image_path) pairs, validating all exist first
+        page_images: list[tuple[int, Path]] = []
         for page_num in chunk.pages:
             img = self.pages_dir / f"page-{page_num:03d}.png"
             if not img.exists():
                 logger.error("  Rasterized page not found: %s", img)
                 raise FileNotFoundError(f"Rasterized page not found: {img}")
-            logger.debug("  OCR page %d: %s (%.1f KB)", page_num, img.name, img.stat().st_size / 1024)
-            page_text = engine.run(img, layer.options)
+            page_images.append((page_num, img))
+
+        def _ocr_one_page(page_num: int, img_path: Path) -> tuple[int, str]:
+            logger.debug("  OCR page %d: %s (%.1f KB)", page_num, img_path.name, img_path.stat().st_size / 1024)
+            page_text = engine.run(img_path, layer.options)
             logger.debug("  OCR page %d result: %d chars, %d words", page_num, len(page_text), len(page_text.split()))
-            texts.append(page_text)
+            return page_num, page_text
+
+        if len(page_images) == 1:
+            # Single page — no thread overhead
+            _, text = _ocr_one_page(*page_images[0])
+            texts = [text]
+        else:
+            # Parallel OCR across pages in this chunk
+            ocr_workers = min(len(page_images), os.cpu_count() or 4)
+            logger.debug("  Parallel OCR: %d pages with %d workers", len(page_images), ocr_workers)
+            results: dict[int, str] = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=ocr_workers) as ocr_pool:
+                futures = {
+                    ocr_pool.submit(_ocr_one_page, pn, img): pn
+                    for pn, img in page_images
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    page_num, page_text = future.result()
+                    results[page_num] = page_text
+            # Reassemble in page order
+            texts = [results[pn] for pn, _ in page_images]
 
         combined = "\n\n".join(texts)
         logger.debug("  OCR combined: %d pages → %d chars total", len(texts), len(combined))
@@ -517,8 +579,10 @@ class PipelineEngine:
 
         logger.debug("  Output format: %s, options: %s", fmt, output_options)
 
-        # MVP: plain text only
-        format_plain_text(chunk_texts, output_path, output_options)
+        if fmt == "md":
+            format_markdown(chunk_texts, output_path, output_options)
+        else:
+            format_plain_text(chunk_texts, output_path, output_options)
 
         output_size = output_path.stat().st_size
         logger.info(
@@ -579,6 +643,11 @@ class PipelineEngine:
         )
 
     def _save_manifest(self) -> None:
+        with self._lock:
+            self._save_manifest_unlocked()
+
+    def _save_manifest_unlocked(self) -> None:
+        """Write manifest to disk. Caller must hold self._lock."""
         self.manifest.updated_at = datetime.datetime.now(
             datetime.timezone.utc
         ).isoformat()

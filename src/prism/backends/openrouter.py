@@ -134,7 +134,7 @@ class OpenRouterBackend(LLMBackend):
         if "choices" not in data:
             logger.error("  Unexpected response structure (no 'choices'): %s", list(data.keys()))
 
-        text = data["choices"][0]["message"]["content"]
+        text = data["choices"][0]["message"].get("content") or ""
         usage = data.get("usage", {})
         tokens_in = usage.get("prompt_tokens")
         tokens_out = usage.get("completion_tokens")
