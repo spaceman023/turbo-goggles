@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PRISM</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="header-left">
+        <h1>PRISM</h1>
+        <span class="subtitle">Pipeline for Recognition, Interpretation &amp; Structured Markup</span>
+      </div>
+      <div class="header-right">
+        <button id="btn-settings" class="btn-icon" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button id="btn-new-job" class="btn primary">New Job</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- Jobs List -->
+      <section id="view-jobs" class="view">
+        <div id="jobs-list"></div>
+        <div id="jobs-empty" class="empty-state" style="display:none">
+          <div class="empty-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          </div>
+          <h3>No jobs yet</h3>
+          <p>Start a new pipeline job to process a PDF.</p>
+          <button class="btn primary" onclick="openBuilder()">Create First Job</button>
+        </div>
+      </section>
+
+      <!-- Job Detail -->
+      <section id="view-detail" class="view" style="display:none">
+        <button id="btn-back" class="btn-link" onclick="showJobs()">&larr; Back to Jobs</button>
+
+        <div id="detail-header" class="detail-header"></div>
+
+        <div id="detail-layers" class="detail-layers"></div>
+
+        <div class="detail-grid">
+          <div class="detail-progress-section">
+            <h3>Progress</h3>
+            <div id="detail-bar" class="progress-bar"><div class="progress-fill"></div></div>
+            <div id="detail-bar-label" class="progress-label"></div>
+            <div id="detail-chunks" class="chunk-grid"></div>
+          </div>
+          <div class="detail-output-section" id="detail-output-section" style="display:none">
+            <div class="output-header">
+              <h3>Output</h3>
+              <div class="output-actions">
+                <button class="btn btn-sm" id="btn-copy-output">Copy</button>
+                <button class="btn btn-sm" id="btn-download-output">Download</button>
+              </div>
+            </div>
+            <div id="detail-output" class="output-preview"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pipeline Builder -->
+      <section id="view-builder" class="view" style="display:none">
+        <div class="builder-topbar">
+          <div class="builder-topbar-left">
+            <button class="btn-link" onclick="closeBuilder()">&larr; Back</button>
+            <input type="text" id="builder-name" class="builder-name-input" placeholder="Pipeline Name" value="My Pipeline">
+            <div class="builder-topbar-field">
+              <label for="builder-workers">Workers: <strong id="builder-workers-val">4</strong></label>
+              <input type="range" id="builder-workers" min="1" max="16" value="4">
+            </div>
+          </div>
+          <div class="builder-topbar-right">
+            <div class="builder-file-wrap">
+              <input type="file" id="builder-pdf" accept=".pdf">
+              <div class="builder-file-label" id="builder-file-label">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span>Choose PDF...</span>
+              </div>
+            </div>
+            <button class="btn" id="btn-load-pipeline" onclick="loadPipeline()">Load Pipeline</button>
+            <button class="btn" id="btn-save-pipeline" onclick="savePipeline()">Save Pipeline</button>
+            <button class="btn primary" id="btn-run-pipeline" onclick="runPipeline()">Run Pipeline</button>
+          </div>
+        </div>
+
+        <div class="builder-body">
+          <!-- Left: Layer Stack -->
+          <div class="builder-panel builder-layers-panel">
+            <div class="builder-panel-header">
+              <h3>Pipeline Layers</h3>
+            </div>
+            <div id="builder-layer-stack" class="builder-layer-stack"></div>
+            <div class="builder-add-layer-wrap">
+              <button class="btn builder-add-btn" id="btn-add-layer" onclick="toggleAddLayerPicker()">+ Add Layer</button>
+              <div id="add-layer-picker" class="add-layer-picker" style="display:none">
+                <div class="picker-section">
+                  <div class="picker-section-label">OCR</div>
+                  <button class="picker-item" onclick="addLayer('ocr','tesseract')">Tesseract</button>
+                  <button class="picker-item" onclick="addLayer('ocr','paddleocr')">PaddleOCR</button>
+                  <button class="picker-item" onclick="addLayer('ocr','easyocr')">EasyOCR</button>
+                  <button class="picker-item" onclick="addLayer('ocr','surya')">Surya</button>
+                  <button class="picker-item" onclick="addLayer('ocr','doctr')">docTR</button>
+                  <button class="picker-item" onclick="addLayer('ocr','macos_vision')">macOS Vision</button>
+                </div>
+                <div class="picker-section">
+                  <div class="picker-section-label">LLM</div>
+                  <button class="picker-item" onclick="addLayer('llm','openrouter')">OpenRouter</button>
+                  <button class="picker-item" onclick="addLayer('llm','codex')">Codex</button>
+                  <button class="picker-item" onclick="addLayer('llm','gemini')">Gemini</button>
+                  <button class="picker-item" onclick="addLayer('llm','claude')">Claude</button>
+                </div>
+                <div class="picker-section">
+                  <div class="picker-section-label">Fusion</div>
+                  <button class="picker-item" onclick="addLayer('fusion','fusion')">Fusion Layer</button>
+                </div>
+                <div class="picker-section">
+                  <div class="picker-section-label">Output</div>
+                  <button class="picker-item" onclick="addLayer('output','txt')">Text (.txt)</button>
+                  <button class="picker-item" onclick="addLayer('output','md')">Markdown (.md)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Layer Inspector -->
+          <div class="builder-panel builder-inspector-panel">
+            <div class="builder-panel-header">
+              <h3>Layer Inspector</h3>
+            </div>
+            <div id="builder-inspector" class="builder-inspector">
+              <div class="inspector-empty">
+                <p>Select a layer to configure it</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Settings Modal (standalone, not inside New Job modal) -->
+    <div id="modal-backdrop" class="modal-backdrop" style="display:none">
+      <div class="modal modal-wide" id="modal-settings" style="display:none">
+        <div class="modal-header">
+          <h2>Settings</h2>
+          <button class="btn-icon modal-close" onclick="closeModals()">&times;</button>
+        </div>
+
+        <div class="settings-tabs">
+          <button class="settings-tab active" data-tab="backends" onclick="switchSettingsTab('backends')">Backends</button>
+          <button class="settings-tab" data-tab="engines" onclick="switchSettingsTab('engines')">OCR Engines</button>
+          <button class="settings-tab" data-tab="defaults" onclick="switchSettingsTab('defaults')">Defaults</button>
+        </div>
+
+        <!-- Backends Tab -->
+        <div class="settings-panel" id="settings-backends">
+          <div class="settings-section">
+            <h4>OpenRouter API</h4>
+            <div class="form-field">
+              <label for="settings-api-key">API Key</label>
+              <input type="password" id="settings-api-key" placeholder="sk-or-v1-...">
+              <div class="field-hint">Stored in memory for this session only.</div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h4>LLM Backend Status</h4>
+            <div id="settings-backend-status" class="status-grid">
+              <p class="field-hint">Loading...</p>
+            </div>
+            <button class="btn btn-sm" style="margin-top:8px" onclick="refreshBackendHealth()">Refresh Status</button>
+          </div>
+        </div>
+
+        <!-- OCR Engines Tab -->
+        <div class="settings-panel" id="settings-engines" style="display:none">
+          <div class="settings-section">
+            <h4>OCR Engine Status</h4>
+            <div id="settings-engine-status" class="status-grid">
+              <p class="field-hint">Loading...</p>
+            </div>
+            <button class="btn btn-sm" style="margin-top:8px" onclick="refreshEngineHealth()">Refresh Status</button>
+          </div>
+
+          <div class="settings-section">
+            <h4>GPU / Accelerator</h4>
+            <div id="settings-gpu-status" class="status-grid">
+              <p class="field-hint">Loading...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Defaults Tab -->
+        <div class="settings-panel" id="settings-defaults" style="display:none">
+          <div class="settings-section">
+            <h4>Default Chunking</h4>
+            <div class="form-field">
+              <label>Strategy</label>
+              <select id="settings-chunk-strategy">
+                <option value="page">Per Page</option>
+                <option value="sliding_window">Sliding Window</option>
+                <option value="whole_document">Whole Document</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Chunk Size (pages)</label>
+              <input type="number" id="settings-chunk-size" min="1" max="50" value="1">
+            </div>
+            <div class="form-field">
+              <label>Overlap (pages)</label>
+              <input type="number" id="settings-chunk-overlap" min="0" max="10" value="0">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h4>Default Workers</h4>
+            <div class="form-field">
+              <label>Max Parallel Workers: <strong id="settings-workers-val">4</strong></label>
+              <input type="range" id="settings-workers" min="1" max="16" value="4" oninput="document.getElementById('settings-workers-val').textContent=this.value">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h4>Output</h4>
+            <div class="form-field">
+              <label>Default Output Format</label>
+              <select id="settings-output-format">
+                <option value="txt">Plain Text (.txt)</option>
+                <option value="md">Markdown (.md)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn" onclick="closeModals()">Close</button>
+          <button type="button" class="btn primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+      </div>
+
+      <!-- Load Pipeline Picker Modal -->
+      <div class="modal" id="modal-load-pipeline" style="display:none">
+        <div class="modal-header">
+          <h2>Load Pipeline</h2>
+          <button class="btn-icon modal-close" onclick="closeModals()">&times;</button>
+        </div>
+        <div id="load-pipeline-list" class="load-pipeline-list">
+          <p class="field-hint">Loading...</p>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn" onclick="closeModals()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
